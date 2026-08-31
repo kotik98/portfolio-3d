@@ -3,6 +3,12 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { artworks, type Artwork, type Lang } from './data/artworks'
 
 type ViewerPhase = 'closed' | 'preloading' | 'opening' | 'open' | 'closing'
+type ViewerTransform = {
+  x: number
+  y: number
+  scale: number
+}
+
 type ViewerSnapshot = {
   element: HTMLElement
   parent: HTMLElement
@@ -14,6 +20,12 @@ type ViewerSnapshot = {
   originalStyle: string
   image: HTMLImageElement | null
   originalImageSrc: string | null
+  transform: ViewerTransform
+  dragStart: { pointerId: number; startX: number; startY: number; originX: number; originY: number } | null
+  wheelHandler: (event: WheelEvent) => void
+  pointerDownHandler: (event: PointerEvent) => void
+  pointerMoveHandler: (event: PointerEvent) => void
+  pointerUpHandler: (event: PointerEvent) => void
 }
 
 const language = ref<Lang>('ru')
@@ -152,6 +164,10 @@ function getViewerTarget(firstRect: DOMRect, sourceAspect?: number) {
   const top = isMobile ? 24 : (window.innerHeight - height) / 2
   return new DOMRect(left, top, width, height)
 }
+function applyViewerTransform(snapshot: ViewerSnapshot) {
+  const { x, y, scale } = snapshot.transform
+  snapshot.element.style.transform = `translate3d(${x}px, ${y}px, 0) scale(${scale})`
+}
 async function openTile(tile: { row: number; column: number; artIndex: number }, element: HTMLElement, preparedImage?: Promise<HTMLImageElement | null> | null) {
   if (isViewerActive.value || !element.isConnected) return
   viewerPhase.value = 'preloading'
@@ -186,6 +202,43 @@ async function openTile(tile: { row: number; column: number; artIndex: number },
     originalStyle: element.getAttribute('style') ?? '',
     image,
     originalImageSrc: sourceImage?.getAttribute('src') ?? null,
+    transform: { x: 0, y: 0, scale: 1 },
+    dragStart: null,
+    wheelHandler: (event: WheelEvent) => {
+      if (!viewerSnapshot || viewerPhase.value === 'closing' || viewerPhase.value === 'closed') return
+      event.preventDefault()
+      const nextScale = Math.min(3, Math.max(1, viewerSnapshot.transform.scale * (event.deltaY < 0 ? 1.12 : 0.88)))
+      viewerSnapshot.transform.scale = nextScale
+      applyViewerTransform(viewerSnapshot)
+    },
+    pointerDownHandler: (event: PointerEvent) => {
+      if (viewerPhase.value !== 'open' || !viewerSnapshot || event.button !== 0) return
+      const target = event.currentTarget as HTMLElement
+      viewerSnapshot.dragStart = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        originX: viewerSnapshot.transform.x,
+        originY: viewerSnapshot.transform.y,
+      }
+      target.setPointerCapture(event.pointerId)
+      target.style.cursor = 'grabbing'
+    },
+    pointerMoveHandler: (event: PointerEvent) => {
+      if (!viewerSnapshot || viewerSnapshot.dragStart === null || event.pointerId !== viewerSnapshot.dragStart.pointerId) return
+      const nextX = viewerSnapshot.dragStart.originX + (event.clientX - viewerSnapshot.dragStart.startX)
+      const nextY = viewerSnapshot.dragStart.originY + (event.clientY - viewerSnapshot.dragStart.startY)
+      viewerSnapshot.transform.x = nextX
+      viewerSnapshot.transform.y = nextY
+      applyViewerTransform(viewerSnapshot)
+    },
+    pointerUpHandler: (event: PointerEvent) => {
+      if (!viewerSnapshot || viewerSnapshot.dragStart === null || event.pointerId !== viewerSnapshot.dragStart.pointerId) return
+      const target = event.currentTarget as HTMLElement
+      if (target.hasPointerCapture(event.pointerId)) target.releasePointerCapture(event.pointerId)
+      target.style.cursor = 'grab'
+      viewerSnapshot.dragStart = null
+    },
   }
   viewerSnapshot = snapshot
   activeTileKey.value = element.dataset.tileKey ?? null
@@ -206,6 +259,13 @@ async function openTile(tile: { row: number; column: number; artIndex: number },
   viewerElement.style.height = `${firstRect.height}px`
   viewerElement.style.transform = 'translate3d(0, 0, 0) scale(1, 1)'
   viewerElement.style.zIndex = '11'
+  viewerElement.style.cursor = 'grab'
+  viewerElement.style.touchAction = 'none'
+  viewerElement.addEventListener('wheel', snapshot.wheelHandler, { passive: false })
+  viewerElement.addEventListener('pointerdown', snapshot.pointerDownHandler)
+  viewerElement.addEventListener('pointermove', snapshot.pointerMoveHandler)
+  viewerElement.addEventListener('pointerup', snapshot.pointerUpHandler)
+  viewerElement.addEventListener('pointercancel', snapshot.pointerUpHandler)
   element.style.visibility = 'hidden'
   viewerPhase.value = 'opening'
   isInfoOpen.value = true
@@ -230,7 +290,8 @@ async function openTile(tile: { row: number; column: number; artIndex: number },
       snapshot.element.style.top = `${target.top}px`
       snapshot.element.style.width = `${target.width}px`
       snapshot.element.style.height = `${target.height}px`
-      snapshot.element.style.transform = 'none'
+      snapshot.transform = { x: 0, y: 0, scale: 1 }
+      applyViewerTransform(snapshot)
       viewerPhase.value = 'open'
       isFocusing.value = false
     }, { once: true })
@@ -312,12 +373,18 @@ async function closeArtwork() {
   const scaleX = snapshot.firstRect.width / currentRect.width
   const scaleY = snapshot.firstRect.height / currentRect.height
   const motionDuration = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 620
+  const currentTransform = `translate3d(${snapshot.transform.x}px, ${snapshot.transform.y}px, 0) scale(${snapshot.transform.scale})`
   activeAnimation = element.animate(
-    [{ transform: 'translate3d(0, 0, 0) scale(1, 1)' }, { transform: `translate3d(${deltaX}px, ${deltaY}px, 0) scale(${scaleX}, ${scaleY})` }],
+    [{ transform: currentTransform }, { transform: `translate3d(${deltaX + snapshot.transform.x}px, ${deltaY + snapshot.transform.y}px, 0) scale(${scaleX * snapshot.transform.scale}, ${scaleY * snapshot.transform.scale})` }],
     { duration: motionDuration, easing: 'cubic-bezier(.18,.75,.23,1)', fill: 'forwards' },
   )
   try { await activeAnimation.finished } catch { /* cleanup still restores the original DOM slot */ }
   activeAnimation.cancel()
+  element.removeEventListener('wheel', snapshot.wheelHandler)
+  element.removeEventListener('pointerdown', snapshot.pointerDownHandler)
+  element.removeEventListener('pointermove', snapshot.pointerMoveHandler)
+  element.removeEventListener('pointerup', snapshot.pointerUpHandler)
+  element.removeEventListener('pointercancel', snapshot.pointerUpHandler)
   sourceElement.style.visibility = ''
   sourceElement.className = snapshot.originalClassName
   sourceElement.setAttribute('style', snapshot.originalStyle)
