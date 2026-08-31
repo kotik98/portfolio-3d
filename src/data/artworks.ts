@@ -113,9 +113,10 @@ const previewClasses = ['water', 'horizon', 'air', 'garden', 'shore', 'rain'] as
 
 export const artworks: Artwork[] = artworkFiles.map((fileName, index) => {
   const number = index < 9 ? `0${index + 1}` : String(index + 1)
-  const source = `/artworks/${encodeURI(fileName)}`
+  const basePath = import.meta.env.BASE_URL || '/'
+  const source = `${basePath}artworks/${encodeURI(fileName)}`
   const thumbnailFileName = fileName.replace(/\.[^.]+$/, '.webp')
-  const thumbnailSource = `/artworks/thumbs/${encodeURI(thumbnailFileName)}`
+  const thumbnailSource = `${basePath}artworks/thumbs/${encodeURI(thumbnailFileName)}`
 
   return {
     title: { ru: `Работа ${number}`, en: `Artwork ${number}` },
