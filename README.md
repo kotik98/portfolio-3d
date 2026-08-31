@@ -1,5 +1,34 @@
-# Vue 3 + TypeScript + Vite
+# Portfolio 3D
 
-This template should help get you started developing with Vue 3 and TypeScript in Vite. The template uses Vue 3 `<script setup>` SFCs, check out the [script setup docs](https://v3.vuejs.org/api/sfc-script-setup.html#sfc-script-setup) to learn more.
+Interactive artist portfolio built with Vue 3, TypeScript, and Vite.
 
-Learn more about the recommended Project Setup and IDE Support in the [Vue Docs TypeScript Guide](https://vuejs.org/guide/typescript/overview.html#project-setup).
+## Features
+
+- 3D gallery-style room navigation
+- language switcher for Russian and English
+- artwork viewer with animated transitions
+- responsive layout for desktop and mobile
+
+## Local development
+
+```bash
+npm install
+npm run dev
+```
+
+## Production build
+
+```bash
+npm run build
+```
+
+## Deployment
+
+This project is configured for GitHub Pages via the workflow in `.github/workflows/deploy.yml`.
+
+## Tech stack
+
+- Vue 3
+- TypeScript
+- Vite
+- CSS custom styling
