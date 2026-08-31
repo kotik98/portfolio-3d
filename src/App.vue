@@ -7,6 +7,7 @@ type ViewerSnapshot = {
   element: HTMLElement
   parent: HTMLElement
   placeholder: HTMLSpanElement
+  sourceElement: HTMLElement
   firstRect: DOMRect
   targetRect: DOMRect
   originalClassName: string
@@ -45,9 +46,44 @@ let driftY = (Math.random() - .5) * .7
 
 const tileWidth = 235
 const tileHeight = 290
+const tileGapX = 22
+const tileGapY = 12
+const tileStrideX = tileWidth + tileGapX
+const tileStrideY = tileHeight + tileGapY
 const galleryColumns = 11
 const galleryRows = 9
 const artworkColumnStride = 19
+const artworkSizes = ref<Record<number, { width: number; height: number }>>({})
+
+function handleArtworkLoad(event: Event, artIndex: number) {
+  const image = event.target as HTMLImageElement
+  const naturalWidth = image.naturalWidth || image.width || 180
+  const naturalHeight = image.naturalHeight || image.height || 220
+  const maxWidth = 220
+  const maxHeight = 280
+  let width = naturalWidth
+  let height = naturalHeight
+  const ratio = naturalWidth / naturalHeight
+
+  if (width > maxWidth) {
+    width = maxWidth
+    height = width / ratio
+  }
+
+  if (height > maxHeight) {
+    height = maxHeight
+    width = height * ratio
+  }
+
+  artworkSizes.value[artIndex] = {
+    width: Math.max(90, Math.round(width)),
+    height: Math.max(110, Math.round(height)),
+  }
+}
+
+function getArtworkTileSize(artIndex: number) {
+  return artworkSizes.value[artIndex] ?? { width: 180, height: 220 }
+}
 
 function positiveModulo(value: number, modulo: number) {
   return ((value % modulo) + modulo) % modulo
@@ -59,8 +95,8 @@ function getProceduralArtworkIndex(column: number, row: number) {
 }
 
 const galleryTiles = computed(() => {
-  const centerColumn = Math.floor(cameraX.value / tileWidth)
-  const centerRow = Math.floor(cameraY.value / tileHeight)
+  const centerColumn = Math.floor(cameraX.value / tileStrideX)
+  const centerRow = Math.floor(cameraY.value / tileStrideY)
   const columnOffset = Math.floor(galleryColumns / 2)
   const rowOffset = Math.floor(galleryRows / 2)
 
@@ -68,7 +104,8 @@ const galleryTiles = computed(() => {
     const column = centerColumn + (index % galleryColumns) - columnOffset
     const row = centerRow + Math.floor(index / galleryColumns) - rowOffset
     const artIndex = getProceduralArtworkIndex(column, row)
-    return { row, column, artIndex }
+    const size = getArtworkTileSize(artIndex)
+    return { row, column, artIndex, width: size.width, height: size.height }
   })
 })
 
@@ -101,12 +138,12 @@ function preloadArtwork(item: Artwork): Promise<HTMLImageElement | null> {
     if (image.complete && image.naturalWidth > 0) void finish()
   })
 }
-function getViewerTarget(firstRect: DOMRect) {
+function getViewerTarget(firstRect: DOMRect, sourceAspect?: number) {
   const isMobile = window.innerWidth <= 700
   const panelWidth = isMobile ? 0 : Math.min(360, window.innerWidth - 48)
   const availableWidth = isMobile ? window.innerWidth - 32 : window.innerWidth - panelWidth - 72
   const maxWidth = isMobile ? Math.min(window.innerWidth * .72, 390) : Math.min(390, availableWidth)
-  const aspect = firstRect.width / firstRect.height
+  const aspect = sourceAspect ?? firstRect.width / firstRect.height
   let width = Math.max(1, maxWidth)
   let height = width / aspect
   const maxHeight = isMobile ? window.innerHeight * .48 : window.innerHeight - 120
@@ -131,32 +168,45 @@ async function openTile(tile: { row: number; column: number; artIndex: number },
   placeholder.setAttribute('aria-hidden', 'true')
   placeholder.style.cssText = `position:absolute;left:${computedStyle.left};top:${computedStyle.top};width:${firstRect.width}px;height:${firstRect.height}px;transform:${computedStyle.transform};`
   parent.insertBefore(placeholder, element)
-  const image = element.querySelector<HTMLImageElement>('.art-image')
+  const sourceImage = element.querySelector<HTMLImageElement>('.art-image')
+  const viewerElement = element.cloneNode(true) as HTMLElement
+  const image = viewerElement.querySelector<HTMLImageElement>('.art-image')
+  const fullSrc = artworks[tile.artIndex].fullSrc
+  const fullAspect = fullImage && fullImage.naturalWidth && fullImage.naturalHeight
+    ? fullImage.naturalWidth / fullImage.naturalHeight
+    : undefined
   const snapshot: ViewerSnapshot = {
-    element,
-    parent,
+    element: viewerElement,
+    parent: viewerLayer,
     placeholder,
+    sourceElement: element,
     firstRect,
-    targetRect: getViewerTarget(firstRect),
+    targetRect: getViewerTarget(firstRect, fullAspect),
     originalClassName: element.className,
     originalStyle: element.getAttribute('style') ?? '',
     image,
-    originalImageSrc: image?.getAttribute('src') ?? null,
+    originalImageSrc: sourceImage?.getAttribute('src') ?? null,
   }
   viewerSnapshot = snapshot
   activeTileKey.value = element.dataset.tileKey ?? null
   current.value = tile.artIndex
-  const fullSrc = artworks[tile.artIndex].fullSrc
-  if (fullImage && image && fullSrc) image.src = fullSrc
-  viewerLayer.appendChild(element)
-  element.classList.add('is-viewer')
-  element.style.position = 'fixed'
-  element.style.left = `${firstRect.left}px`
-  element.style.top = `${firstRect.top}px`
-  element.style.width = `${firstRect.width}px`
-  element.style.height = `${firstRect.height}px`
-  element.style.transform = 'none'
-  element.style.zIndex = '11'
+  if (image && fullSrc) {
+    image.src = fullSrc
+    image.loading = 'eager'
+    image.decoding = 'async'
+    image.style.objectFit = 'contain'
+    image.style.objectPosition = 'center'
+  }
+  viewerLayer.appendChild(viewerElement)
+  viewerElement.classList.add('is-viewer')
+  viewerElement.style.position = 'fixed'
+  viewerElement.style.left = `${firstRect.left}px`
+  viewerElement.style.top = `${firstRect.top}px`
+  viewerElement.style.width = `${firstRect.width}px`
+  viewerElement.style.height = `${firstRect.height}px`
+  viewerElement.style.transform = 'translate3d(0, 0, 0) scale(1, 1)'
+  viewerElement.style.zIndex = '11'
+  element.style.visibility = 'hidden'
   viewerPhase.value = 'opening'
   isInfoOpen.value = true
   await nextTick()
@@ -168,7 +218,7 @@ async function openTile(tile: { row: number; column: number; artIndex: number },
   openAnimationFrame = requestAnimationFrame(() => {
     openAnimationFrame = undefined
     if (viewerSnapshot !== snapshot || viewerPhase.value !== 'opening') return
-    activeAnimation = element.animate(
+    activeAnimation = snapshot.element.animate(
       [{ transform: 'translate3d(0, 0, 0) scale(1, 1)' }, { transform: `translate3d(${deltaX}px, ${deltaY}px, 0) scale(${scaleX}, ${scaleY})` }],
       { duration: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 620, easing: 'cubic-bezier(.18,.75,.23,1)', fill: 'forwards' },
     )
@@ -176,11 +226,11 @@ async function openTile(tile: { row: number; column: number; artIndex: number },
       if (viewerSnapshot !== snapshot || viewerPhase.value !== 'opening') return
       activeAnimation?.commitStyles()
       activeAnimation?.cancel()
-      element.style.left = `${target.left}px`
-      element.style.top = `${target.top}px`
-      element.style.width = `${target.width}px`
-      element.style.height = `${target.height}px`
-      element.style.transform = 'none'
+      snapshot.element.style.left = `${target.left}px`
+      snapshot.element.style.top = `${target.top}px`
+      snapshot.element.style.width = `${target.width}px`
+      snapshot.element.style.height = `${target.height}px`
+      snapshot.element.style.transform = 'none'
       viewerPhase.value = 'open'
       isFocusing.value = false
     }, { once: true })
@@ -253,6 +303,8 @@ async function closeArtwork() {
   isInfoOpen.value = false
   if (openAnimationFrame) cancelAnimationFrame(openAnimationFrame)
   const element = snapshot.element
+  const sourceElement = snapshot.sourceElement
+  const sourceParent = sourceElement.parentElement ?? snapshot.parent
   const currentRect = element.getBoundingClientRect()
   activeAnimation?.cancel()
   const deltaX = snapshot.firstRect.left - currentRect.left
@@ -266,17 +318,19 @@ async function closeArtwork() {
   )
   try { await activeAnimation.finished } catch { /* cleanup still restores the original DOM slot */ }
   activeAnimation.cancel()
-  element.className = snapshot.originalClassName
-  element.setAttribute('style', snapshot.originalStyle)
-  if (snapshot.image && snapshot.originalImageSrc !== null) snapshot.image.src = snapshot.originalImageSrc
-  snapshot.parent.insertBefore(element, snapshot.placeholder)
+  sourceElement.style.visibility = ''
+  sourceElement.className = snapshot.originalClassName
+  sourceElement.setAttribute('style', snapshot.originalStyle)
+  if (sourceElement.querySelector('img') && snapshot.originalImageSrc !== null) sourceElement.querySelector<HTMLImageElement>('img')!.src = snapshot.originalImageSrc
+  sourceParent.insertBefore(sourceElement, snapshot.placeholder)
   snapshot.placeholder.remove()
+  element.remove()
   viewerSnapshot = null
   activeTileKey.value = null
   activeAnimation = null
   viewerPhase.value = 'closed'
   isFocusing.value = false
-  snapshot.element.focus({ preventScroll: true })
+  sourceElement.focus({ preventScroll: true })
 }
 function handleKeydown(event: KeyboardEvent) { if (event.key === 'Escape' && isViewerActive.value) void closeArtwork() }
 onMounted(() => {
@@ -301,7 +355,7 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', handleKeydown); if
       <div class="ceiling-light" /><div class="gallery-surface" />
       <div class="art-orbit">
         <div class="camera-plane" :style="{ transform: `translate3d(${-cameraX}px, ${-cameraY}px, 0)` }">
-          <button v-for="tile in galleryTiles" :key="tileKey(tile)" class="artwork" :class="[artworks[tile.artIndex].className, { holding: holdingTile === tileKey(tile) }]" :data-art-index="tile.artIndex" :data-tile-key="tileKey(tile)" :style="{ transform: activeTileKey === tileKey(tile) ? 'none' : `translate3d(${tile.column * tileWidth}px, ${tile.row * tileHeight}px, 0)`, '--hold-progress': holdProgress }" type="button" :aria-label="`${t.select}: ${artworks[tile.artIndex].title[language]}`" @pointerdown.stop="startHold($event, tile)" @pointermove.stop="movePointer" @pointerup.stop="endPointer($event)" @pointercancel.stop="endPointer($event)"><img v-if="artworks[tile.artIndex].thumbSrc" class="art-image" :src="artworks[tile.artIndex].thumbSrc" :alt="artworks[tile.artIndex].alt[language]" :style="{ objectPosition: artworks[tile.artIndex].objectPosition ?? 'center' }" loading="lazy" decoding="async" /><span v-else class="canvas" /><span class="hold-indicator" /></button>
+          <button v-for="tile in galleryTiles" :key="tileKey(tile)" class="artwork" :class="[artworks[tile.artIndex].className, { holding: holdingTile === tileKey(tile) }]" :data-art-index="tile.artIndex" :data-tile-key="tileKey(tile)" :style="{ width: `${tile.width}px`, height: `${tile.height}px`, transform: activeTileKey === tileKey(tile) ? 'none' : `translate3d(${tile.column * tileStrideX}px, ${tile.row * tileStrideY}px, 0)`, '--hold-progress': holdProgress }" type="button" :aria-label="`${t.select}: ${artworks[tile.artIndex].title[language]}`" @pointerdown.stop="startHold($event, tile)" @pointermove.stop="movePointer" @pointerup.stop="endPointer($event)" @pointercancel.stop="endPointer($event)"><img v-if="artworks[tile.artIndex].thumbSrc" class="art-image" :src="artworks[tile.artIndex].thumbSrc" :alt="artworks[tile.artIndex].alt[language]" :style="{ objectPosition: artworks[tile.artIndex].objectPosition ?? 'center' }" loading="lazy" decoding="async" @load="handleArtworkLoad($event, tile.artIndex)" /><span v-else class="canvas" /><span class="hold-indicator" /></button>
         </div>
       </div>
       <div class="mist" />
